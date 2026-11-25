@@ -1,73 +1,151 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
   <head>
-    <!-- Required meta tags -->
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <!-- Limite les serveurs auxquels la page peut parler : le mot de passe ne peut partir que vers Google Apps Script.
+         ('unsafe-eval' est requis par la bibliothèque instascan.) -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline' blob:; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src https://script.google.com https://*.googleusercontent.com; base-uri 'none'; form-action 'none'; object-src 'none'" />
     <title>Emargement JPO</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; max-width: 640px; margin-inline: auto; }
+      h3 { text-align: center; }
+      .centre { text-align: center; }
+      input[type=password], select { font-size: 1rem; padding: .5rem; width: 100%; box-sizing: border-box; margin: .5rem 0; }
+      button { font-size: 1rem; padding: .6rem 1rem; }
+      #statut { margin: 12px 0; padding: 12px; border-radius: 8px; font-weight: 600; display: none; }
+      #statut.ok { display: block; background: #d9f2de; color: #14532d; }
+      #statut.ko { display: block; background: #fde2e2; color: #7f1d1d; }
+      #statut.info { display: block; background: #e5eefc; color: #1e3a8a; }
+      #erreurLogin { color: #7f1d1d; min-height: 1.4em; }
+    </style>
   </head>
-  
-  <body class="cont">
-    
-    <h3 class="txt-cntr mar-top-2">Journée Portes Ouvertes Icam - Site de Toulouse</h3>
 
-    <article class="pad-2">
-        <section>
-            <div class="frm-grp txt-cntr">
-                <label class="disp-blck">Choose camera:</label>
-                <select id="webcameraChanger" onchange="cameraChange($(this).val());" class="frm-ctrl mar-btm-2"></select>
-            </div>
-            <!-- web camera view component -->
-            <video id="webcameraPreview" playsinline autoplay controls muted loop style="width: 100%;"></video>
-        </section>
+  <body>
+    <h3>Journée Portes Ouvertes Icam - Site de Toulouse</h3>
+
+    <!-- Écran de connexion : le mot de passe n'est JAMAIS écrit dans ce code (il est public sur GitHub Pages) -->
+    <section id="login" class="centre">
+      <p>Entrez le mot de passe d'émargement :</p>
+      <input type="password" id="mdp" autocomplete="off" autocapitalize="off" />
+      <button type="button" id="btnLogin">Se connecter</button>
+      <p id="erreurLogin"></p>
+    </section>
+
+    <article id="scan" style="display:none">
+      <div id="statut" role="status" aria-live="polite"></div>
+      <div class="centre">
+        <label>Choose camera :</label>
+        <select id="webcameraChanger" onchange="cameraChange($(this).val());"></select>
+      </div>
+      <video id="webcameraPreview" playsinline autoplay controls muted loop style="width: 100%;"></video>
+      <p class="centre"><button type="button" id="btnQuitter">Se déconnecter</button></p>
     </article>
 
-    <script src="https://code.jquery.com/jquery-3.3.1.min.js" integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
+    <!-- Une seule copie de jQuery, hébergée avec le site (plus de dépendance à un CDN externe) -->
     <script type="text/javascript" src="./external/jquery.min.js"></script>
     <script type="text/javascript" src="./external/adapter.min.js"></script>
     <script type="text/javascript" src="./external/instascan.js"></script>
     <script type="text/javascript" src="./src/QrCodeScanner.js"></script>
     <script type="text/javascript">
-        // HTML video component for web camera
-        var videoComponent = $("#webcameraPreview");
-        // HTML select component for cameras change
-        var webcameraChanger = $("#webcameraChanger");
-        var options = {};
-        // init options for scanner
-        options = initVideoObjectOptions("webcameraPreview");
+      var URL_SCRIPT = 'https://script.google.com/macros/s/AKfycbw9LjFmkJjLokaqJVoTaKRw4Gme3ErtS7d_M12bjA-Ega3I41uwipjk-4byQWyypJ3UJA/exec';
+      var CLE = 'ema_mdp'; // sessionStorage : effacé à la fermeture de l'onglet
+      var scanDemarre = false;
+      var enCours = false;
+
+      function lireMdp() { try { return sessionStorage.getItem(CLE) || ''; } catch (e) { return window.__mdp || ''; } }
+      function ecrireMdp(v) { try { if (v) sessionStorage.setItem(CLE, v); else sessionStorage.removeItem(CLE); } catch (e) { window.__mdp = v; } }
+
+      // Envoi en POST (le mot de passe ne passe jamais dans l'URL, donc pas dans les journaux)
+      function appeler(champs) {
+        champs.key = lireMdp();
+        return fetch(URL_SCRIPT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: new URLSearchParams(champs),
+          credentials: 'omit',
+          referrerPolicy: 'no-referrer'
+        }).then(function (r) { return r.text(); });
+      }
+
+      function montrer(texte, classe) {
+        var el = document.getElementById('statut');
+        el.textContent = texte;   // textContent : jamais d'HTML issu d'un QR code
+        el.className = classe;
+        if (navigator.vibrate) navigator.vibrate(classe === 'ok' ? 80 : [120, 60, 120]);
+      }
+
+      function connecter() {
+        var saisie = document.getElementById('mdp').value;
+        var err = document.getElementById('erreurLogin');
+        if (!saisie) { err.textContent = 'Mot de passe requis.'; return; }
+        ecrireMdp(saisie);
+        err.textContent = 'Vérification…';
+        appeler({ action: 'verify' }).then(function (rep) {
+          if (rep.indexOf('Success') === 0) {
+            err.textContent = '';
+            document.getElementById('mdp').value = '';
+            afficherScan();
+          } else {
+            ecrireMdp('');
+            err.textContent = rep.replace(/^Error:\s*/, '') || 'Échec de connexion.';
+          }
+        }).catch(function () {
+          ecrireMdp('');
+          err.textContent = 'Connexion impossible (réseau ou adresse du script).';
+        });
+      }
+
+      function deconnecter() {
+        ecrireMdp('');
+        location.reload();
+      }
+
+      function afficherScan() {
+        document.getElementById('login').style.display = 'none';
+        document.getElementById('scan').style.display = 'block';
+        if (scanDemarre) return;
+        scanDemarre = true;
+
+        var options = initVideoObjectOptions('webcameraPreview');
+        var webcameraChanger = $('#webcameraChanger');
         var cameraId = 0;
-
         initScanner(options);
-
-        initAvaliableCameras(
-            webcameraChanger,
-            function () {
-                cameraId = parseInt(getSelectedCamera(webcameraChanger));
-            }
-        );
-
+        initAvaliableCameras(webcameraChanger, function () {
+          cameraId = parseInt(getSelectedCamera(webcameraChanger));
+        });
         initCamera(cameraId);
 
-        function postEmailAddressToSheet(email) {
-            $.ajax({
-                url: 'https://script.google.com/macros/s/AKfycbw9LjFmkJjLokaqJVoTaKRw4Gme3ErtS7d_M12bjA-Ega3I41uwipjk-4byQWyypJ3UJA/exec',
-                type: 'POST',
-                data: { email: email },
-                success: function (response) {
-                    console.log(response);
-                },
-                error: function (error) {
-                    console.error('Error:', error);
-                },
-            });
-        }
-
         scanStart(function (data) {
-            // Assuming the scanned data is an email address
-            postEmailAddressToSheet(data);
-            alert(data + " a bien été enregistré");
+          if (enCours) return; // un scan à la fois
+          enCours = true;
+          montrer('Envoi…', 'info');
+          appeler({ email: String(data).slice(0, 300) }).then(function (rep) {
+            if (rep.indexOf('Success') === 0) {
+              montrer('✔ ' + rep.replace(/^Success:\s*/, ''), 'ok');
+            } else {
+              var msg = rep.replace(/^Error:\s*/, '');
+              if (/accès refusé/i.test(msg)) { ecrireMdp(''); msg += ' – reconnectez-vous.'; }
+              montrer('✘ ' + msg, 'ko');
+            }
+          }).catch(function () {
+            montrer('✘ Scan NON enregistré : réseau indisponible, rescannez.', 'ko');
+          }).then(function () { enCours = false; });
         });
-    </script>
+      }
 
+      document.getElementById('btnLogin').addEventListener('click', connecter);
+      document.getElementById('btnQuitter').addEventListener('click', deconnecter);
+      document.getElementById('mdp').addEventListener('keydown', function (e) { if (e.key === 'Enter') connecter(); });
+
+      // Session déjà ouverte dans cet onglet : on la revérifie auprès du serveur
+      if (lireMdp()) {
+        appeler({ action: 'verify' }).then(function (rep) {
+          if (rep.indexOf('Success') === 0) afficherScan(); else ecrireMdp('');
+        }).catch(function () {});
+      }
+    </script>
   </body>
 </html>
